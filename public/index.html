@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Фронтенд-стрічка</title>
+<style>
+:root{--bg:#f3f4f8;--card:#fff;--ink:#151726;--mute:#5d6178;--line:#dfe1ea;--acc:#4338ca;--on:#fff;--hot:#d9480f}
+:root[data-theme=dark]{--bg:#0f1019;--card:#181a27;--ink:#eceefa;--mute:#9ca0bb;--line:#2b2e42;--acc:#a5a0ff;--on:#12121f;--hot:#ff8a50}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+.wrap{max-width:1180px;margin:auto;padding:0 16px}
+header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding-block:24px 8px}
+h1{font-size:2rem;letter-spacing:-.03em;margin-right:auto}h1 span{color:var(--acc)}
+button,input,select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:7px 13px}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.meta{color:var(--mute);font-size:.875rem}
+.bar{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding-block:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+#q{flex:1;min-width:200px}
+#cats{flex-wrap:nowrap;overflow-x:auto;padding:10px 2px 2px}
+.chip{border-radius:99px;white-space:nowrap;font-size:.875rem}
+.chip[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:var(--on)}
+#list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr));gap:14px;padding-block:18px}
+article{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+article img{width:100%;aspect-ratio:2/1;object-fit:cover;background:var(--line)}
+.body{padding:14px 16px;display:flex;flex-direction:column;gap:8px;flex:1;overflow-wrap:anywhere}
+h2{font-size:1.08rem;line-height:1.35}h2 a{color:inherit;text-decoration:none}h2 a:hover{color:var(--acc);text-decoration:underline}
+.read{opacity:.55}
+.new{color:var(--hot);font-weight:700}
+.foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.star{padding:2px 10px}.star[aria-pressed=true]{color:var(--hot);border-color:var(--hot)}
+#more{display:block;margin:0 auto 24px}
+#empty{padding:40px 0;text-align:center;grid-column:1/-1}
+@media(max-width:640px){.bar{position:static}}
+details{padding-block:12px 32px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>Фронтенд<span>/</span>стрічка</h1>
+  <span class="meta" id="status" role="status">Завантаження…</span>
+  <button id="refresh">Оновити</button>
+  <button id="theme" aria-label="Змінити тему">◐</button>
+</header>
+<div class="bar"><div class="wrap">
+  <div class="row">
+    <input id="q" type="search" placeholder="Пошук: container queries, signals, Vite…" aria-label="Пошук">
+    <select id="period" aria-label="Період"><option value="0">За весь час</option><option value="1">За 24 години</option><option value="7">За тиждень</option><option value="30">За місяць</option></select>
+    <select id="source" aria-label="Джерело"></select>
+    <select id="sort" aria-label="Сортування"><option value="date">Спершу нові</option><option value="score">Спершу популярні</option></select>
+  </div>
+  <div class="row" id="cats"></div>
+</div></div>
+<main class="wrap">
+  <p class="meta" id="count" style="padding-top:14px"></p>
+  <div id="list"></div>
+  <button id="more">Показати ще</button>
+  <details class="meta"><summary>Стан джерел</summary><div id="health"></div></details>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem('fe:' + k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('fe:' + k, JSON.stringify(v)); } catch {} }
+};
+const HOUR = 3600e3, PAGE = 36;
+let items = [], cat = 'Усі', limit = PAGE, loadedAt = 0, updated = null, busy = false, live = false;
+const saved = new Map(store.get('saved', []));
+const read = new Set(store.get('read', []));
+const lastVisit = store.get('visit', 0);
+store.set('visit', Date.now());
+
+const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+const rtf = new Intl.RelativeTimeFormat('uk', { numeric: 'auto' });
+function ago(d) {
+  const m = Math.round((Date.parse(d) - Date.now()) / 60000);
+  if (Math.abs(m) < 60) return rtf.format(m, 'minute');
+  if (Math.abs(m) < 1440) return rtf.format(Math.round(m / 60), 'hour');
+  return rtf.format(Math.round(m / 1440), 'day');
+}
+const web = u => typeof u === 'string' && /^https?:\/\//i.test(u);
+
+// Запасний режим без сервера: джерела, які дозволяють запити з браузера
+async function fetchLive() {
+  const json = async u => { const r = await fetch(u, { signal: AbortSignal.timeout(15000) }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+  const dev = ['frontend','javascript','react','css','webdev','vue','typescript','angular'].map(t => ['DEV #' + t, async () =>
+    (await json(`https://dev.to/api/articles?tag=${t}&top=7&per_page=40`)).map(a => ({ title: a.title, url: a.url, date: a.published_at, text: a.description || '', image: a.cover_image, source: 'DEV Community', cat: 'Спільнота', score: a.public_reactions_count }))]);
+  const since = Math.floor(Date.now() / 1000) - 14 * 86400;
+  const hn = ['javascript','css','react','frontend','typescript'].map(q => ['HN ' + q, async () =>
+    (await json(`https://hn.algolia.com/api/v1/search_by_date?query=${q}&tags=story&hitsPerPage=40&numericFilters=created_at_i>${since},points>10`)).hits.map(h => ({ title: h.title, url: h.url || 'https://news.ycombinator.com/item?id=' + h.objectID, date: h.created_at, text: `${h.points} балів на Hacker News`, source: 'Hacker News', cat: 'Спільнота', score: h.points }))]);
+  const res = await Promise.all([...dev, ...hn].map(async ([name, run]) => { try { const l = await run(); return { name, count: l.length, items: l }; } catch (e) { return { name, count: 0, items: [], error: e.message }; } }));
+  const all = new Map(res.flatMap(r => r.items).map(i => [i.url, i]));
+  if (!all.size) throw new Error('джерела недоступні');
+  return { updated: new Date().toISOString(), status: res, items: [...all.values()] };
+}
+
+async function load() {
+  if (busy) return;
+  busy = true; $('refresh').disabled = true; $('status').textContent = 'Оновлення…';
+  try {
+    let data;
+    try {
+      const r = await fetch('data/news.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw 0;
+      data = await r.json(); live = false;
+    } catch (e) {
+      // якщо повна стрічка вже була, не замінюємо її урізаною
+      if (items.length && !live) throw new Error('немає звʼязку з сервером');
+      data = await fetchLive(); live = true;
+    }
+    items = data.items.filter(i => web(i.url)).sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+    updated = data.updated; loadedAt = Date.now();
+    fillSources(); fillCats(); health(data.status || []); render();
+    busy = false; showStatus();
+  } catch (e) {
+    $('status').textContent = `Не вдалося оновити (${e.message}). Спробуємо ще раз за кілька хвилин.`;
+    loadedAt = Date.now() - HOUR + 5 * 60e3;
+    if (!items.length) render();
+  } finally { busy = false; $('refresh').disabled = false; }
+}
+function showStatus() {
+  if (!updated || busy) return;
+  const left = Math.max(0, Math.ceil((loadedAt + HOUR - Date.now()) / 60000));
+  $('status').textContent = `${live ? 'Лише DEV і Hacker News · ' : ''}Дані ${ago(updated)} · перевірка через ${left} хв`;
+}
+function health(list) {
+  $('health').replaceChildren(...list.map(s => el('p', { textContent: s.error ? `✗ ${s.name}: ${s.error}` : `✓ ${s.name}: ${s.count}` })));
+}
+function fillSources() {
+  const cur = $('source').value;
+  const names = [...new Set(items.map(i => i.source))].sort((a, b) => a.localeCompare(b, 'uk'));
+  $('source').replaceChildren(new Option('Усі джерела', ''), ...names.map(n => new Option(n, n)));
+  $('source').value = names.includes(cur) ? cur : '';
+}
+function fillCats() {
+  const cats = ['Усі', '★ Збережене', ...new Set(items.map(i => i.cat))];
+  $('cats').replaceChildren(...cats.map(c => {
+    const b = el('button', { className: 'chip', textContent: c, onclick() { cat = c; limit = PAGE; fillCats(); render(); } });
+    b.setAttribute('aria-pressed', c === cat);
+    return b;
+  }));
+}
+function card(i) {
+  const a = el('article', { className: read.has(i.url) ? 'read' : '' });
+  if (web(i.image)) a.append(el('img', { src: i.image, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer', onerror() { this.remove(); } }));
+  const mark = () => { read.add(i.url); a.className = 'read'; store.set('read', [...read].slice(-3000)); };
+  const link = el('a', { href: i.url, target: '_blank', rel: 'noopener noreferrer', textContent: i.title, onclick: mark, onauxclick: mark });
+  const star = el('button', { className: 'star', onclick() {
+    saved.has(i.url) ? saved.delete(i.url) : saved.set(i.url, i);
+    store.set('saved', [...saved]); paint();
+    if (cat === '★ Збережене') render();
+  } });
+  const paint = () => { const on = saved.has(i.url); star.textContent = on ? '★' : '☆'; star.setAttribute('aria-pressed', on); star.setAttribute('aria-label', on ? 'Прибрати зі збереженого' : 'Зберегти'); };
+  paint();
+  const meta = el('p', { className: 'meta' }, `${i.source} · ${ago(i.date)}`);
+  if (lastVisit && Date.parse(i.date) > lastVisit) meta.append(el('span', { className: 'new', textContent: ' · нове' }));
+  a.append(el('div', { className: 'body' }, meta, el('h2', {}, link), el('p', { className: 'meta', textContent: i.text || '' }),
+    el('div', { className: 'foot' }, el('span', { className: 'meta', textContent: i.cat + (i.score ? ` · ▲ ${i.score}` : '') }), star)));
+  return a;
+}
+function render() {
+  const words = $('q').value.toLowerCase().split(/\s+/).filter(Boolean);
+  const days = +$('period').value, src = $('source').value;
+  let list = (cat === '★ Збережене' ? [...saved.values()] : items).filter(i =>
+    (cat === 'Усі' || cat === '★ Збережене' || i.cat === cat) &&
+    (!src || i.source === src) &&
+    (!days || Date.now() - Date.parse(i.date) < days * 864e5) &&
+    words.every(w => `${i.title} ${i.text} ${i.source}`.toLowerCase().includes(w)));
+  if ($('sort').value === 'score') list = [...list].sort((a, b) => (b.score || 0) - (a.score || 0));
+  $('count').textContent = `Матеріалів: ${list.length}`;
+  $('list').replaceChildren(...list.slice(0, limit).map(card));
+  if (!list.length) $('list').append(el('p', { id: 'empty', className: 'meta', textContent: items.length || cat === '★ Збережене' ? 'Нічого не знайдено. Змініть фільтри або пошук.' : 'Новин ще немає. Якщо сервер щойно запущено, вони зʼявляться за кілька хвилин.' }));
+  $('more').hidden = list.length <= limit;
+}
+['q','period','source','sort'].forEach(id => $(id).addEventListener('input', () => { limit = PAGE; render(); }));
+$('more').onclick = () => { limit += PAGE; render(); };
+$('refresh').onclick = load;
+const setTheme = t => document.documentElement.dataset.theme = t;
+setTheme(store.get('theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+$('theme').onclick = () => { const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; setTheme(t); store.set('theme', t); };
+// Перевірка щохвилини переживає сон комп'ютера. Поки даних немає, пробуємо частіше.
+function tick() {
+  const wait = items.length ? HOUR : 60e3;
+  if (Date.now() - loadedAt >= wait) load(); else showStatus();
+}
+setInterval(tick, 60e3);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+fillCats(); load();
+</script>
+</body>
+</html>

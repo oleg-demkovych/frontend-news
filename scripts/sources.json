@@ -53,5 +53,5 @@
  {"name":"Tailwind CSS","cat":"CSS","url":"https://tailwindcss.com/feeds/feed.xml"},
  {"name":"Nuxt","cat":"Vue","url":"https://nuxt.com/blog/rss.xml"},
  {"name":"CSS Weekly","cat":"CSS","url":"https://css-weekly.com/feed/"},
- {"name":"Frontend Dogma","cat":"Статті","url":"https://frontenddogma.com/feed.xml"}
+ {"name":"Frontend Dogma","cat":"Статті","url":"https://frontenddogma.com/feed/"}
 ]

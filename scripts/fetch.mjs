@@ -45,8 +45,14 @@ export function parseFeed(xml, src) {
   }).filter(i => i.title && i.url && i.date);
 }
 
-async function get(url) {
+async function get(url, tries = 4) {
   const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'FrontendNews/1.0 (RSS reader)', accept: 'application/rss+xml, application/atom+xml, application/json, text/xml, */*' } });
+  // 429: сервіс просить зачекати
+  if (res.status === 429 && tries > 1) {
+    const wait = Math.min(Number(res.headers.get('retry-after')) || 10, 60);
+    await new Promise(r => setTimeout(r, wait * 1000));
+    return get(url, tries - 1);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
@@ -93,7 +99,6 @@ export async function update() {
   const sources = JSON.parse(await readFile(new URL('scripts/sources.json', root), 'utf8'));
   const jobs = [
     ...sources.map(s => [s.name, () => rss(s)]),
-    ...DEV_TAGS.map(t => [`DEV #${t}`, () => devto(t)]),
     ...['javascript','css','react','frontend','typescript'].map(q => [`HN ${q}`, () => hn(q)]),
   ];
   const results = [];
@@ -102,6 +107,12 @@ export async function update() {
       try { return { name, items: await run() }; }
       catch (e) { return { name, items: [], error: e.message }; }
     })));
+  }
+  // DEV обмежує частоту запитів, тому теги читаємо по черзі
+  for (const t of DEV_TAGS) {
+    await new Promise(r => setTimeout(r, 1500));
+    try { results.push({ name: `DEV #${t}`, items: await devto(t) }); }
+    catch (e) { results.push({ name: `DEV #${t}`, items: [], error: e.message }); }
   }
   const fresh = results.flatMap(r => r.items);
   if (!fresh.length) throw new Error('Жодне джерело не відповіло — старі дані збережено');
@@ -112,7 +123,7 @@ export async function update() {
   await writeFile(tmp, JSON.stringify(data));
   await rename(tmp, OUT);
   const failed = data.status.filter(s => s.error);
-  console.log(`${data.updated}: ${items.length} матеріалів; помилок: ${failed.length}/${jobs.length}`);
+  console.log(`${data.updated}: ${items.length} матеріалів; помилок: ${failed.length}/${results.length}`);
   failed.forEach(f => console.log(`  ✗ ${f.name}: ${f.error}`));
   return data;
 }

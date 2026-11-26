@@ -19,6 +19,7 @@
 
 ## Без сервера
 Якщо просто відкрити `public/index.html`, застосунок читає напряму з браузера тільки DEV Community та Hacker News.
+CSS-Tricks, SitePoint і Reddit вилучено: вони не віддавали стрічки серверу GitHub.
 
 ## Джерела
 Список у `scripts/sources.json`: `name`, `cat`, `url`, необов'язково `filter` (регулярний вираз) і `max`.
